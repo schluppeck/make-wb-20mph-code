@@ -1,0 +1,95 @@
+---
+title: Basic traffic data from `stats19`
+author: Denis Schluppeck
+date: '2021-10-13'
+slug: basic-traffic-data-from-stats19
+categories:
+  - traffic
+tags:
+  - 20mph
+  - nottingham
+---
+
+To raise awareness about the actual number of traffic accidents in our neighbourhood I have decided to do some number crunching and plotting (since this is what I do a lot of in my day job as a scientist).
+
+I will try to bring out the numbers as clearly as I can (and I will let them speak for themselves). There is no claim for completeness, but if you want to inspect how I went about it the code (in `R`) is published on my `github` page: https://github.com/schluppeck/make-web-20mph-code/
+
+
+## To start: a map
+
+These are data from the `stats19` database from the 5 year period 2015-2019.
+
+- I have merged the "casualties" and "accidents" tables available from `stats19` to combine information of **who got injured** and **where the accident occurred*
+
+- only cases handled by the "Nottinghamshire" police are included
+
+- this map only includes cases where the speed limit was <= 40mph
+
+- pedestrian casualties are shown in **red**, **cyclists** in magenta, others (such as people in cars) in blue. Pedestrians and cyclists are shown with slighly larger symbols.
+
+
+```{r include = FALSE}
+library(tidyverse)
+library(stats19)
+library(sf)
+theYear = c(2015,2016,2017,2018,2019)
+casualties = get_stats19(year = theYear, type = "casualties")
+crashes = get_stats19(year = theYear, type = "accidents")
+crashes_sf = format_sf(crashes)
+vehicles = get_stats19(year = theYear, type = "vehicles", ask = FALSE)
+
+ng = filter(police_boundaries, pfa16nm == "Nottinghamshire")
+
+crashes_ng = crashes_sf[ng, ]
+nrow(crashes_sf)
+nrow(crashes_ng)
+
+sel = casualties$accident_index %in% crashes_ng$accident_index
+casualties_ng = casualties[sel, ]
+cas_types = casualties_ng %>% 
+  select(accident_index, casualty_type) %>% 
+  mutate(n = 1) %>% 
+  group_by(accident_index, casualty_type) %>% 
+  summarise(n = sum(n)) %>% 
+  tidyr::spread(casualty_type, n, fill = 0) 
+cas_types$Total = rowSums(cas_types[-1])
+cj = left_join(crashes_ng, cas_types, by = "accident_index")
+
+
+base::setdiff(names(cj), names(crashes_ng))
+
+theme_set(theme_minimal())
+```
+
+```{r, echo=FALSE}
+library(leaflet)
+
+# roundabout in WB
+y= 52.9311215
+x=-1.1270815
+
+# only show events where speed limit was <= 40 mph
+cj_local <- cj %>% 
+  filter(speed_limit <=40)
+
+
+m <- leaflet(data = cj_local) %>%
+  addProviderTiles(providers$Stamen.Toner) %>%  
+  # not default OpenStreetMap map tiles
+  addCircleMarkers(
+      lng = cj_local$longitude, lat = cj_local$latitude,
+      #adjust size
+      radius = ~if_else(cj_local$Pedestrian==1 |
+                          cj_local$Cyclist==1, 8, 4),
+      # colour them in
+      color = ~case_when(cj_local$Pedestrian==1 ~ "red",
+                         cj_local$Cyclist==1 ~ "magenta",
+                       TRUE ~ "blue"), # ~pal(speed_limit),
+      stroke = TRUE, fillOpacity = 0.8) %>%
+   setView(lng = x, lat = y, zoom=13)
+
+m  # show map
+
+
+```
+
