@@ -1,0 +1,102 @@
+---
+title: "Results of informal survey"
+author: "R package build"
+date: '2021-10-15'
+output:
+  html_document:
+    df_print: paged
+categories: traffic
+tags:
+- 20mph
+- wb
+slug: results-of-informal-survey
+---
+
+Together with my original facebook post, I put together a [very short survey](https://forms.gle/TigMEgcqZXq5vApm7) and asked the following questions:
+
+1. "What do you think about making the speed limit on all residential roads in WB 20mph?"
+
+2. "Any other ideas / comments / questions?"
+
+3. "Your e-mail address (optional)" - for letting people know what I found out.
+
+An important caveat here is that this is not a scientific poll and just because there are lots of positive views expressed here doesn't necessarily mean that the same proportion of people in all of WB feel this way.
+
+Nevertheless, I think it's clear that there is a **strong** desire for some change.
+
+```{r, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(kableExtra)
+
+# enable rendering from within RStudio console
+# where getwd() is different that in rendering context
+if ("data" %in% list.files()) {
+  pathvar = "./"
+} else {
+  pathvar = "../../../"
+}
+
+d <- readxl::read_excel(str_c(pathvar, "data/make-wb-20mph-spreadsheet.xlsx")) %>% 
+  clean_names() %>% 
+  rename(in_favour = starts_with("what_do_you"),
+         other_thoughts = starts_with("any_other")) %>% 
+  select(-1, -last_col())
+  
+theme_set(theme_minimal())
+```
+
+## Summary
+
+As of today (2021-10-15), 36 people filled in the form.
+
+```{r, echo=FALSE}
+d %>% 
+  ggplot(aes(x = for_against, fill = for_against)) + 
+  geom_bar(show.legend = FALSE) +
+  scale_fill_brewer() +
+  geom_text(aes(label = ..count..), stat="count", nudge_y = -2 ) +
+  theme(aspect.ratio = 0.5) +
+  labs(y = NULL, x = NULL, title = "20mph in WB?") +
+  coord_flip() 
+    
+```
+
+
+Reading through the comments a couple of things stand out from the responses:
+
+- **enforcement** is felt to be a huge issue.
+- there are several place across WB that cause people issues
+- **speeding is not the only issue**. it sounds like cars run pedestrian crossings all the time. not cool.
+- **speed bumps** may be a bad idea (bad for buses, cars, may encourage speeding between bumps...)
+
+Note: there are some cogent arguments against introducing blanket 20mph. Some of them are expressed in one of the **against** entries. But unfortunately, there is also a favourite "toys-out-of-the-pram" entry in the **against** bracket: 
+
+>Teach your kids to cross the road properly if you’re worried. 
+
+Anonymous of course. Maybe what they meant was for there to be "more education on road safety at home and at school"?. But clearly, some people have deep-seated issues they need to resolve.
+
+
+## Replies to Question 1 (yes/no?)
+
+```{r, echo=FALSE}
+d %>% 
+  select(in_favour) %>% 
+  rownames_to_column() %>% 
+  kbl(escape = F,col.names = NULL) %>% 
+  row_spec(which(d$for_against=="for"), background="#EEEEEE") 
+
+```
+
+## Replies to Question 2 (Any other comments)
+
+```{r, echo=FALSE}
+d %>% 
+  select(other_thoughts) %>% 
+  rownames_to_column() %>% 
+  kbl(escape = F,col.names = NULL) %>% 
+  row_spec(which(d$for_against=="for"), background="#EEEEEE") 
+
+```
+
