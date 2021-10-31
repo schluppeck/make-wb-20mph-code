@@ -1,0 +1,276 @@
+---
+title: "When do most pedestrians/cyclists get hit?"
+author: "Denis Schluppeck"
+date: '2021-10-28'
+slug: when-do-accidents-happen-updated-data-from-dft
+categories: traffic
+tags: 20mph
+---
+
+Since I first put up [a map of traffic accidents / casualties](https://schluppeck.github.io/make-wb-20mph/2021/10/13/basic-traffic-data-from-stats19/) at the start of October '21, the Department for Transport has updated its openly accessible data. This means that now data for the years between 2016 and 2020 is easily accessible.
+
+I think  knowing **when** accidents are most common is as important as known **where** they occur across our county. In this blog post, I will look at that data.
+
+
+
+```{r, include = FALSE}
+library(tidyverse)
+library(lubridate)
+library(stats19)
+library(sf)
+theYear = c(2016,2017,2018,2019,2020)
+
+# a function to load a stats19 file, but fix lat/lon issues 
+# in some files
+get_crashes <- function(aYear) {
+  d <- get_stats19(aYear, type = "accident") %>% 
+    mutate(longitude = as.numeric(longitude),
+           latitude = as.numeric(latitude))
+}
+# same for reading in files. lat/lon gets wrongly parsed
+# as char instead of double, so do casting explicitly
+read_crashes <- function(aYear, ...) {
+  d <- read_accidents(aYear, ...) %>% 
+    mutate(longitude = as.numeric(longitude),
+           latitude = as.numeric(latitude))
+}
+
+
+# deal with folder locations during render / test
+if ("data" %in% list.files()) {
+  data_dir = "./data"
+} else {
+  data_dir = "../../../data"
+}
+
+# if data have been cached:
+cache_file_name <- "2021-10-29-when-data.RData" 
+if (cache_file_name %in% list.files(path=data_dir)) {
+  paste("yay - cached data present")
+  paste("... loading")
+  load(paste0(data_dir, '/', cache_file_name))
+} else {
+  paste("nay - loading from CSV files")
+  
+  # download the data - if CSV files already exist in data_dir, 
+  # this will not re-download, but still takes a bit of time
+  walk(theYear, dl_stats19, 
+       type = "casualty", data_dir = data_dir)
+  walk(theYear, dl_stats19, 
+       type = "accident", data_dir = data_dir)
+  walk(theYear, dl_stats19, 
+       type = "vehicle", data_dir = data_dir)
+
+  # read in casualties and merge rowwise
+  casualties = map_dfr(theYear, read_casualties, 
+                     data_dir = data_dir)
+  # crashes
+  crashes = map_dfr(theYear, read_crashes, 
+                       data_dir = data_dir)
+  crashes_sf = format_sf(crashes)
+  
+  # vehicle data not needed, so save time
+  # vehicles = map_dfr(theYear, get_stats19, type = "vehicle")
+  
+  
+  ng = filter(police_boundaries, pfa16nm == "Nottinghamshire")
+  
+  # subset crashes data to NG only
+  crashes_ng = crashes_sf[ng, ]
+
+  # subset casualties to NG area
+  sel = casualties$accident_index %in% crashes_ng$accident_index
+  casualties_ng = casualties[sel, ]
+  
+  # summarise casualties
+  cas_types = casualties_ng %>% 
+    select(accident_index, casualty_type) %>% 
+    mutate(n = 1) %>% 
+    group_by(accident_index, casualty_type) %>% 
+    summarise(n = sum(n)) %>% 
+    tidyr::spread(casualty_type, n, fill = 0) 
+  cas_types$Total = rowSums(cas_types[-1])
+  
+  # join casualties and crash data / time, location etc,
+  cj = left_join(crashes_ng, cas_types, by = "accident_index")
+}
+
+
+# set theme for plotting
+theme_set(theme_minimal())
+```
+
+## When do most accidents happen during the day / week?
+
+A look at the pattern of accidents in Nottinghamshire (not just West Bridgford) **over time** is quite revealing - it provides quite a bit of additional insight to what we already learnt from [the map view](https://schluppeck.github.io/make-wb-20mph/2021/10/13/basic-traffic-data-from-stats19/) from a previous post. 
+
+In particular, let's look at the average pattern of pedestrian and cyclist casualties during the day and across the week (over the last 5 years).
+
+
+
+```{r, echo = FALSE, message = FALSE, warning=FALSE}
+
+# get hour, weekday, week, month and year from datetime object
+# keep accident_severity for plotting later.
+crash_times = cj %>%
+  filter(Pedestrian > 0 | Cyclist > 0) %>% 
+  st_set_geometry(NULL) %>% 
+  mutate(hour = hour(datetime),
+         wday = wday(datetime),
+         week = week(datetime),
+         month = month(datetime),
+         year = year(datetime),
+         accident_severity = as.factor(accident_severity)) 
+
+# for heatmap, summarise numbers, still partitioned by severity
+ct_grid <- crash_times %>% 
+  group_by(hour, wday) %>% 
+  summarise(fatal = sum(accident_severity == "Fatal"),
+             serious = sum(accident_severity == "Serious"),
+            slight = sum(accident_severity == "Slight")) 
+
+# another version that's gridded by month year 
+# not currently used for plotting, though
+ct_grid_week <- crash_times %>% 
+  group_by(month, year) %>% 
+  summarise(fatal = sum(accident_severity == "Fatal"),
+             serious = sum(accident_severity == "Serious"),
+            slight = sum(accident_severity == "Slight")) 
+
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+## this is the day / week plot
+#Assign color variables
+col1 = "#d8e1cf"  # gray 
+col2 = "#ff2222"  # reddish
+
+g <- ct_grid %>% ggplot( aes(hour, wday)) + 
+  geom_tile(aes(fill = slight+fatal+serious),
+            colour = "white", na.rm = TRUE) +
+  scale_fill_gradient(low = col1, high = col2) + 
+  scale_x_continuous(breaks = c(6,9,12,15,18)) +
+  scale_y_reverse(breaks = 1:7, labels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")) +
+  guides(fill=guide_legend(title="# casualties")) +
+  labs(title = "Nottinghamshire accidents",
+       subtitle = "2016-2020, data: dft.gov.uk",
+       x = "Time of day" ,
+       y = "",) +
+  geom_vline(xintercept = c(9,15), color = "black", size=0.75) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), aspect.ratio = 0.6, text = element_text(size=18)) 
+
+g
+```
+
+- the heatmap plot shows more casualties on weekdays around 9am and just after 3pm - the times when lots of people are on the road -- commuting to work and getting to and from school: the more red the colour, the more accidents happened. Each row corresponds to a weekday (top: Sunday) and each column to a one-hour slot during the day (starting at 0000h on the left).
+
+- maybe not surprisingly, weekdays are worse than Saturday/Sunday
+
+
+## What age groups are affected when?
+
+One important question for me was: 
+
+>Are there times of day that are more dangerous than others? What do the data from the last 5 years show?
+
+The distribution of pedestrian and cyclist casualties over the the span of the day, also **taking into account the age group**, shows a very clear pattern:
+
+
+```{r, echo = FALSE, warning=FALSE,message=FALSE, out.height="50%"}
+
+# summarise casualties / only pedestrians, cyclists...
+# the age bands in DFT data are a bit narrow, resulting in 
+# maybe too many plots to be useful
+# I first turn age_bands into an ordered factor
+# then re-bin the data to <20, 21-55, >56, and missing
+
+age_bands = c("0 - 5", "6 - 10","11 - 15","16 - 20","21 - 25", "26 - 35", "46 - 55", "56 - 65", "66 - 75",  "Over 75",  "Data missing or out of range")
+
+cas_types_age = casualties_ng %>% 
+  select(accident_index, casualty_type, age_band_of_casualty) %>%
+  mutate(age_band_of_casualty = ordered(age_band_of_casualty,
+                                        levels=age_bands),
+         age_group = fct_collapse(age_band_of_casualty,
+            `<20y` = c("0 - 5", "6 - 10","11 - 15","16 - 20"),
+            `21-55y` = c("21 - 25", "26 - 35", "46 - 55"),
+            `>56y` = c("56 - 65", "66 - 75",  "Over 75"),
+            missing = c("Data missing or out of range")),
+         age_group = fct_explicit_na(age_group, "missing"),
+         n = 1) %>% 
+    group_by(accident_index, age_group, .drop=FALSE) %>% 
+    group_by(casualty_type, .add=TRUE) %>% 
+    summarise(n = sum(n)) 
+  
+# join casualties and crash data / time, location etc,
+cj_age = left_join(crashes_ng, cas_types_age, by = "accident_index")
+
+age_plot <- cj_age %>% 
+  st_set_geometry(NULL) %>% 
+  filter(casualty_type %in% c("Pedestrian", "Cyclist")) %>% 
+  mutate(wday = wday(datetime),
+         month = month(datetime),
+         hour = hour(datetime)) %>% 
+  ggplot(aes(x = hour, fill = casualty_type )) + 
+  geom_histogram(bins = 24) +
+  scale_fill_brewer(palette = "Set1",guide="none") +
+  facet_grid(age_group~casualty_type) +
+  scale_x_continuous(breaks = c(6,9,12,15,18)) +
+  scale_y_continuous(breaks = c(0, 50, 100)) +
+  labs(title = "Nottinghamshire accidents (by daytime, age)",
+       subtitle = "2016-2020, data: dft.gov.uk",
+       x = "Time of day" ,
+       y = "Count") +
+  geom_vline(xintercept = c(9,15), color = "black", size=0.5) +
+  theme( panel.grid.minor = element_blank(),
+         text = element_text(size=18))
+
+age_plot
+```
+
+- the largest number of accidents occur **around 9am** (900h) and **around 3pm** (1500h): there are peaks in the histogram plots close to those times - I have added vertical lines to label 9am and 3pm.
+
+- especially in the afternoon (3pm onwards) a **large number of those younger than 20y** are affected: the peaks in the first row of plots (cyclists on the left, pedestrians on the right) are much larger.
+
+- the peak times for accidents in 21 - 55 year olds is shifted to slighly later. This presumably reflects the later commute times compared to school finishing times.
+
+**Food for thought!**
+
+## Reality check: 2020 & COVID?
+
+For the map shown below, data from the `stats19` database now represent the 5 year period of 2016-2020.
+
+- as before, I have merged the "casualties" and "accidents" tables available from `stats19` to combine information of **who got injured** and **where the accident occurred**.
+
+- key: pedestrian casualties in **red**, cyclists in **magenta**, others (such as people in cars) in **blue**.
+
+
+```{r, echo=FALSE}
+library(leaflet)
+
+# roundabout in WB
+y= 52.9311215
+x=-1.1270815
+
+# only show events where speed limit was <= 40 mph
+cj_local <- cj %>% 
+  filter(speed_limit <=40)
+
+m <- leaflet(data = cj_local) %>%
+  addProviderTiles(providers$Stamen.Toner) %>%  
+  # not default OpenStreetMap map tiles
+  addCircleMarkers(
+      lng = cj_local$longitude, lat = cj_local$latitude,
+      #adjust size
+      radius = ~if_else(cj_local$Pedestrian==1 |
+                          cj_local$Cyclist==1, 4, 2),
+      # colour them in
+      color = ~case_when(cj_local$Pedestrian==1 ~ "red",
+                         cj_local$Cyclist==1 ~ "magenta",
+                       TRUE ~ "blue"), # ~pal(speed_limit),
+      stroke = TRUE, fillOpacity = 0.8) %>%
+   setView(lng = x, lat = y, zoom=13)
+
+m  # show map
+```
+
